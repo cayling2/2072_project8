@@ -1,0 +1,576 @@
+---
+title: "HUGEN 2072 Project 8"
+output:
+  html_document:
+    code_folding: show
+    toc: true
+    toc_float: true
+editor_options: 
+  markdown: 
+    wrap: sentence
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+# Instructions
+
+Below is a guided tutorial to perform some advanced analyses building upon the results from project 7's GWAS of height.
+Some code has been provided to you and some you will need to write yourself.
+
+Project 8 has three components:
+
+-   **Scripting/coding**: read through this file and complete the pipeline by contributing your code *where indicated*.
+
+-   **Narrative**: knit the completed .Rmd to a code-integrated HTML report of your QC process and decisions.
+
+    -   Your report must answer all the questions and perform all the tasks indicated in the instructions/prompts given for each step.
+
+    -   You must submit a successfully-knitted HTML file and the `.Rmd` in order to earn a passing grade for this project.
+
+    -   Set up your report to flow like an actual document you might show your supervisor to summarize the project, emphasizing what was done at each step rather than the code used to do it
+
+    -   **Submit your .Rmd and HTML to Canvas**
+
+-   **Presentation**: you will make a 10-min (maximum) recording of yourself with Panopto in which you summarize this GWAS.
+    Instructions will given on Canvas.
+
+In each part of this project you will implement one analysis strategy we learned in class (some steps completed for you).
+
+**Since the code below is incomplete, some of the R code chunks are set to `eval=FALSE` so that knitting to HTML will succeed. You will need to change them to `eval=TRUE` as you progress so that your knitted document shows the results of running each chunk.**
+
+**It is expected that you will copy this file somewhere to your directory on the CRC cluster so that you can use the RStudio Server, where all the packages you need have been installed already.**
+
+**To standardize the starting point of this project, I have provided the necessary results from project 7, so please use those instead of any of your generated files.**
+
+## Part 0 - Setup Workspace and Load Sample Data
+
+First, load the packages we'll be using.
+
+```{r load_packages, message=F, eval=TRUE}
+
+# Load the required packages for the project (Install them if necessary)
+
+library("SeqArray", quietly = TRUE)
+library("SeqVarTools", quietly = TRUE)
+library("GENESIS", quietly = TRUE)
+library("locuszoomr", quietly = TRUE)
+library("EnsDb.Hsapiens.v86", quietly = TRUE)
+library("rsq", quietly = TRUE)
+library("EasyQC", quietly = TRUE)
+library("qqman", quietly = TRUE)
+library("tidyverse", quietly = TRUE)
+library("ggforce", quietly = TRUE)
+
+
+# Close any open GDS files before proceeding (think of this as starting off with a 'blank slate')
+
+showfile.gds(closeall = T, verbose = T)
+```
+
+All of the files you will need are located on the cluster in `/ix1/hugen2072_2025s/p8/`.
+
+```{r part0_setup}
+
+# path to folder for project
+shared_folder <- "/ix1/hugen2072-2026s/p8/"
+
+```
+
+## Part 1 - Evaluate GWAS hits
+
+A version of the GWAS from project 7 has been provided for you in the file `p8_study1_gwas_results.txt`.
+
+The columns here are:
+
+-   variant.id: the variant ID from the GDS file
+
+-   chr: chromosome
+
+-   pos: position (hg38)
+
+-   effect_allele: allele coded additively for GWAS
+
+-   other_allele: the other allele at the variant (non-effect allele)
+
+-   imp_r2: imputation quality r-squared
+
+-   freq: the frequency of the effect allele
+
+-   genotyped: `TRUE` if variant was genotyped, `FALSE` if it was imputed
+
+-   n.obs: sample size with non-missing data at that variant
+
+-   MAC: minor allele count
+
+-   Score, Score.SE, Score.Stat, Score.pval, Est, Est.SE, and PVE: columns from `assocTestSingle()` run.
+
+-   strand: strand indicator
+
+```{r part1_gwas}
+
+# read in results from GWAS 1
+gwas1 <- read_table(paste0(shared_folder, "p8_study1_gwas_results.txt"))
+gwas1
+
+```
+
+## Part 1 - Report
+
+### Top SNP
+
+In the results file provided to you, which SNP has the most significant association with height?
+Report the GDS variant.id, chromosome, position, alleles, GWAS p-value, GWAS effect size, effect allele, effect allele frequency, and whether the SNP was genotyped or imputed.
+
+Variant ID: 542766
+
+Chr: 19
+
+Pos: 28492903
+
+Other Allele: C
+
+Effect Allele: T
+
+P-value: 1.059281\*10\^-6
+
+Effect Size: 0.8849243
+
+Effect Allele Frequency: 0.1258224
+
+Genotyped?:
+Imputed
+
+```{r part1_report_topsnp}
+
+# Your code goes here
+gwas1_sorted <- gwas1 %>% sort_by(gwas1$Score.pval)
+
+top_snp <- gwas1_sorted %>% head(n = 1) 
+top_snp <- top_snp[c("variant.id", "chr", "pos", "other_allele", "effect_allele", "freq", "Score.pval", "Est", "genotyped")]
+
+top_snp
+```
+
+### Sina plot
+
+The code below gives you an example of how to merge in genotypes for a variant from the results with the sample annotation file.
+
+Edit the code below for the top SNP you just identified.
+
+```{r part1_report_geno}
+
+# load sample annotation file
+load(paste0(shared_folder, "p8_study1_sample_info.RData"), verbose = TRUE)
+head(pData(sample.info))
+
+# open SeqArray GDS file of genetic data from study 1
+gds <- seqOpen(paste0(shared_folder, "p8_study1_imputed_data.gds"))
+gds
+
+# Extract genotype for one variant
+#  this code just does the first variant in the results file
+# Change my_chr and my_variant to match your variant of interest
+
+my_chr <- "19" # change this to the chromosome you want (keep as character)
+my_variant <- 542766 # change this to the variant.id you want (keep as numeric)
+
+# Filter gds file to chromosome of interest
+seqSetFilterChrom(gds, include=my_chr)
+
+# Additionally filter to variant.id of interest
+seqSetFilter(gds, variant.id=my_variant, verbose=TRUE, action = "intersect")
+
+# Get dosage of variant
+geno <- altDosage(gds)
+
+# Close gds file
+seqClose(gds)
+
+# Create a data object with genotypes
+geno_df <- as_tibble(geno, rownames = "sample.id")
+names(geno_df)[2] <- c("genotype")
+
+# Merge with annotation file
+annot_geno <- inner_join(pData(sample.info), geno_df, by=c("sample.id"))
+
+# Examine genotype distribution
+annot_geno %>% count(genotype)
+
+
+```
+
+Create a sina plot that shows the raw values of height across genotype groups at this top variant.
+
+Comment on whether you think the genotype model you specified is appropriate for this variant or not.
+
+Since the 0/1 genotypes are roughly the same on the y-axis and the 2 genotype is bumped up that there may be some recessiveness in the genotype.
+I think the overall model with gene dosages is good and the sina plot looks good, even if the 2 dosage group doesn't have a lot of data points compared to the other groups.
+
+```{r part1_report_sina}
+
+# Your code goes here 
+tmp <- annot_geno %>% group_by(genotype) %>% 
+  summarise(sd = sd(height, na.rm = TRUE), mean = mean(height, na.rm = TRUE))
+
+annot_geno %>% ggplot(aes(x = genotype, y = height, group = genotype))+
+  geom_sina(alpha = 0.3)+
+  geom_pointrange(aes(x = genotype, y = mean, ymin = mean-sd, ymax = mean+sd), data = tmp, inherit.aes = FALSE)
+```
+
+### LocusZoom plot
+
+Edit the code below to create a LocusZoom plot centered around the SNP you just identified.
+Based on this plot you created, how confident do you feel that this signal is *not* a false positive?
+Explain.
+
+```{r part1_report_lz}
+
+########################################
+### Code you need to edit
+my_chr <- "19" # change this to the chromosome you want (keep as character)
+my_variant <- 542766 # change this to the variant.id you want (keep as numeric)
+my_lz_window <- c(28242903, 28742903) # change to be the positions for the window you want to plot (typically +/- 250 kb around your top SNP)
+#######################################
+
+
+# a function to calculate LD from a gds file for a given index variant
+calculateLD <- function(gdsfile, chr, variant.id, ref.var=NULL, sample.id=NULL) {
+    gds <- seqOpen(gdsfile)
+    seqSetFilterChrom(gds, include=chr)
+    seqSetFilter(gds, variant.id=variant.id, sample.id=sample.id, verbose=TRUE, action = "intersect")
+    geno <- altDosage(gds)
+    seqClose(gds)
+
+    # correlations for just ref.var, or the entire matrix?
+    if (is.null(ref.var)){
+        geno.ref <- geno
+    } else {
+        geno.ref <- geno[,as.character(ref.var)]
+    }
+
+    # drop unnecessary dimensions (if ref.var is a single variant)
+    r <- drop(cor(geno, geno.ref, use="pairwise.complete.obs"))
+    
+    ld <- as_tibble(r^2, rownames="variant.id") %>% 
+      dplyr::rename(LD = value) %>% 
+      mutate(variant.id = as.numeric(variant.id)) %>% 
+      dplyr::select(variant.id, LD)
+    
+    return(ld)
+
+}
+
+# Subset results file to region of interest
+gwas1_locus <- 
+  gwas1 %>% 
+  filter(chr == as.numeric(my_chr) & pos >= my_lz_window[1] & pos <= my_lz_window[2])
+
+# calculate LD with variant
+ld <- calculateLD(gdsfile = paste0(shared_folder, "p8_study1_imputed_data.gds"),
+                  chr = my_chr,
+                  variant.id = gwas1_locus$variant.id,
+                  ref.var=my_variant) 
+
+# merge LD back with gwas results
+gwas1_locus <- inner_join(gwas1_locus, ld %>% dplyr::select(variant.id, LD), by = "variant.id")
+
+# create a unique SNP identifier column
+gwas1_locus <- 
+  gwas1_locus %>% 
+  mutate(snp_id = paste(chr, pos, other_allele, effect_allele, sep=":"))
+
+# locuszoom plot
+loc <- locus(data = gwas1_locus, 
+             p = "Score.pval",
+             xrange = my_lz_window, 
+             seqname = my_chr,
+             labs = "snp_id",
+             LD = "LD",
+             ens_db = "EnsDb.Hsapiens.v86")
+summary(loc)
+locus_plot(loc)
+
+```
+
+Based on this plot you created, how confident do you feel that this signal is *not* a false positive?
+Explain.
+
+I am a little concerned about the signal being a false positive since there is no LD that would indicate the truth of the signal, this could be caused by an indel but still gives cause for concern.
+It would be best to look at variants near the signal to determine if it is an indel or if it is a false positive.
+Looking into MAF of the variant to check for inflation is also a good choice since the lack of LD is concerning for the signal.
+
+## Part 2 - PGS
+
+Another study of height generated a polygenic score to predict height (<https://www.pgscatalog.org/score/PGS002975/>).
+
+You have been provided with pre-harmonized data for the PGS scoring file `p8_pgs002975_scores.txt` and PLINK formatted data for study 1 `p8_study1.bed|bim|fam`.
+
+**Edit the template code below to point the output to your directory with the `OUT_FOLDER` variable.**
+
+Then run the code below.
+At the command line, load PLINK with `module load plink/1.90b7.7`, then run the PLINK command.
+
+```         
+module load plink/1.90b7.7
+
+# edit this to point to your directory 
+OUT_FOLDER=/bgfs/jcarlson/hugen2072/Advanced_GWAS_project
+
+CLASS_FOLDER=/ix1/hugen2072-2026s/p8/
+
+plink --bfile $CLASS_FOLDER/p8_study1 \
+--score  $CLASS_FOLDER/p8_pgs002975_scores.txt header sum \
+--out $OUT_FOLDER/p8_study1_scored 
+```
+
+Read the `.profile` file created by PLINK, which contains the values of the PGS and merge with the phenotypes from the annotation object.
+
+```{r part2_pgs}
+
+# Your code goes here
+p8_profile <- read_table("./p8_study1_scored.profile")
+
+#merge
+annot_geno <- rename(annot_geno, IID = sample.id)
+
+mergedp8 <- left_join(annot_geno, p8_profile, by = "IID")
+```
+
+## Part 2 - Report
+
+How many SNPs were in the starting PGS scoring files were used here?
+How many variants matched the PLINK files for the imputed data?
+
+There were originally 647629 variants in the PGS scoring file and all of those passed the QC.
+All of the variants matched the PLINK files for the imputed data as the genotyping rate is exactly 1.
+
+Based on these results from above applying the PGS for height, evaluate the utility of this PGS in predicting height.
+Make sure you report the PGS p-value, phenotypic variance explained (both incremental and partial r2), and an effect size estimate.
+
+This PGS is not very good at predicting height as the incremental r2 is only 0.0001 and the partial r2 is 0.00057.
+This means that the variance in the model is not very well explained by the PGS.
+The p-value for the PGS is 0.229 and the effect size estimate is 0.6277.
+Another reason the PGS is not very good at predicting height is that the p-value is not significant with an alpha of 0.05 indicating it is not a very good predictor of height.
+
+```{r part2_report}
+
+# Your code goes here
+pgs_full <- lm(height ~ SCORESUM + factor(sex) + pop + genotype, data = mergedp8)
+  
+pgs_reduced <-lm(height ~ factor(sex) + pop + genotype, data = mergedp8)
+
+summary(pgs_full)
+summary(pgs_reduced)
+
+0.7351-0.735
+
+rsq.partial(objF = pgs_full, objR = pgs_reduced)
+```
+
+## Part 3 - File Harmonization Before Meta Analysis
+
+Use the R package EasyQC to perform quality checks for the GWAS from project 7 and for the second GWAS of the height from the UK Biobank (which was already been run).
+
+You can assume the genotypes in both studies have been cleaned (although we will investigate allele frequencies a little).
+EasyQC is primarily checking that the GWAS output isn't nonsensical and that alleles are coded consistently between the two studies.
+
+The following files are provided for this part:
+
+-   `p8_study1_gwas_results.txt` - standardized results from the GWAS of height from project 7
+-   `p8_study2_gwas2_results.txt` - results from a GWAS for height from the UK Biobank (positions are in hg38) (that have been downsampled for you)
+-   `p8_gwas1_gwas2.ecf` - a configuration file for EasyQC
+-   `p8_snp_reference.txt` - an annotation file containing population allele frequencies
+
+The configuration file `gwas1_gwas2.ecf` is almost entirely set up for you.
+You only need to make a few changes.
+**Copy the file `gwas1_gwas2.ecf` to your home directory.**
+
+-   First read through the file and the comments.
+    The documentation (<https://homepages.uni-regensburg.de/~wit59712/easyqc/EasyQC_9.0_Commands_140918_2.pdf>) also explains how the program works.
+
+-   Specify where to write the output with the `--pathOut` flag (near the top of the file).
+    Replace the path with a location within your home directory.
+
+In R, load the EasyQC package and run your configuration script with the command like `EasyQC("p8_gwas1_gwas2.ecf")`, supplying the path to your .ecf file.
+This will take a few minutes.
+
+The output includes a log, report (with counts of the number of variants dropped for each cleaning step), some plots, some more files containing information about variants failing some of the filters, and the cleaned data (i.e., GWAS results with problematic variants removed).
+
+Note: everything that you will need to move forward is created as output files.
+So, you can run the next code chunk once and then leave `eval=FALSE` for the chunk when you knit this file.
+
+Also note that multiple runs of this script file does NOT overwrite the results, it names them with successful counters (e.g., CLEANED.study_1.gz CLEANED_study_1.1.gz).
+I recommend you only run this once, otherwise you will need to carefully edit the metal script in the next part to point to the correct files.
+
+```{r part3_easyqc, eval=FALSE}
+
+#/ix1/hugen2072-2026s/p8/ 
+
+# Process the GWAS files with EasyQC
+# change this to the path to your folder where you have your copy of the ecf file
+EasyQC("p8_gwas1_gwas2.ecf")
+
+```
+
+## Part 3 - Report
+
+Read the cleaned individual GWAS results (`CLEANED.study_1.gz` and `CLEANED.study_2.gz` from EasyQC), and the EasyQC report file (`p8_gwas1_gwas2.rep`) into R.
+
+Summarize the sample sizes for the two individual GWASs.
+
+How many variants were in each of the two individual GWAS (after EasyQC filtering)?
+
+According to the EasyQC report, how many variants were dropped from each?
+
+The GWAS for study 1 had 104466 variants in and 107531 of those variants made it through the GWAS.
+Study 2 had 488915 variants in and 483354 of those variants made it out.
+This means that 3,065 variants were added to study 1(?) and 5,561 were dropped from study 2.
+
+How many were flagged for allele frequency discrepancies, for being duplicates, or for failing some other validity check?
+
+Study 1dropped 1 variants for invalid SE, and 44 variants for monomorph.
+Study 2 dropped 31 variants for invalid SE, and 2 variants for invalid beta.
+In the .rep file there was nothing indicating any variants dropped due to being duplicates or allele frequency duplications, but there were some reference mismatching and some recoding that happened in the data.
+
+```{r part3_report}
+
+# Your code goes here
+clean_1 <- fread("./CLEANED.study1.gz")
+clean_2 <- fread("./CLEANED.study2.gz")
+rep <- fread("./p8_gwas1_gwas2.rep")
+
+rep
+```
+
+## Part 4 - Meta Analysis
+
+Use METAL to meta-analyze the two GWAS results.
+
+First, read the documentation to learn how to make a script that meta-analyzes the two studies (<https://genome.sph.umich.edu/wiki/METAL_Documentation>).
+
+The configuration file `p8_metal_script.txt` has been provided.
+Read through this file and use the documentation for METAL at the link provided to make sense of what options have been used in this script.
+
+Copy this script to your folder.
+Edit the file to provide the paths to the EasyQC output files `CLEANED.study_1.gz` and `CLEANED.study_2.gz`.
+
+At the command line, load metal with `module load metal/2020-05-05`.
+To run the meta-analysis use the command `metal p8_metal_script.txt`.
+Make sure that you run this from the folder that contains your copy of `p8_metal_script.txt`.
+
+The output will be a log file and a text file with the suffix ".TBL", which contains a table of meta-analysis results.
+
+```         
+module load metal/2020-05-05
+metal p8_metal_script.txt
+```
+
+Note that multiple runs of this script file does NOT overwrite the results, it names them with successful counters (e.g., METAANALYSIS_1.TBL, METAANALYSIS2.TBL).
+Be sure you read in the results file you want to by editing the code below.
+
+Read the meta-analysis results (the .TBL file) into R and make Manhattan/Q-Q plots for the meta-analysis results.
+Edit the code provided below to point to the results file in your directory.
+You will need to turn on this chunk prior to knitting by setting `EVAL=TRUE`.
+
+```{r part4_meta}
+
+# Your code goes here
+metal <- fread("METAANALYSIS1.TBL")
+
+#https://tidyr.tidyverse.org/reference/separate.html
+#Used link above to learn how to seperate the marker column to align with the needs of manhattan plot
+
+metal2 <- separate(metal, sep = ":", col = MarkerName, into = c("chr", "pos"), extra = "drop") 
+metal2$chr <- as.numeric(metal2$chr)
+metal2$pos <- as.numeric(metal2$pos)
+
+metal2$snp <- metal$MarkerName
+
+manhattan(metal2, chr = "chr", bp = "pos", p = "P-value", snp = "snp")
+
+qq(metal2$`P-value`)
+```
+
+## Part 4 - Report
+
+Based on your reading of the metal script, what method of meta-analysis did we use?
+
+The methods of the method script use standard error and effect size estimates to analyse the data across the two GWAS studies.
+
+Using the meta-analysis results you read in above, do the following:
+
+Make a table summarizing effect directions across the two studies
+
+```         
+    --     -?     -+     ?-     ?+     +-     +?     ++   
+    16615  18826  16438 206959 208123  16597  19253  16735 
+```
+
+How many variants are shared across the two studies (i.e., how many have a non-missing effect and p-value in BOTH studies)?
+
+66385 variants are shared across the two studies.
+
+How many variants are unique to each study?
+
+453161 variants are unique for the studies, 38079 for allele 1 and 415082 for allele 2.
+
+What percentage of variants present in both studies have the same effect direction in both studies?
+
+50.24% of the variants present in both studies have the same effect direction.
+
+For the most significant variant in the meta-analysis **that was present in both studies**, make a forest plot that shows the two individual study effect estimates and confidence intervals.
+Hint: you will need to read in the cleaned files from Easy QC for each study.
+Comment on whether the variant's effects seems to be homogeneous (based on the forest plot).
+
+**NOTE:** Metal returns Allele1 and Allele2 and the effects and directions it reports are for Allele1.
+If you want the opposite allele coding, you need to multiple the effect estimate by `-1`.
+
+```{r part4_report}
+
+# Your code goes here
+
+#table summarizing effect directions across the two studies
+table(metal2$Direction)
+
+#how many have a non-missing effect and p-value in BOTH studies
+#all columns with no ?
+total <- 16615+16438+16597+16735
+total
+
+#How many variants are unique to each study?
+#opp of above
+total2 <- 18826+206959+208123+19253
+total2
+
+#What percentage of variants present in both studies have the same effect direction in both studies?
+((16615+16735)/(16615+16438+16597+16735))*100
+
+
+#FOREST PLOT
+#For the most significant variant in the meta-analysis that was present in both studies, make a forest plot that shows the two individual study effect estimates and confidence intervals. Hint: you will need to read in the cleaned files from Easy QC for each study. Comment on whether the variant's effects seems to be homogeneous (based on the forest plot).
+
+#commented out for the length of the knitted file
+#sort_by(metal2, metal2$`P-value`)
+
+#scrolled through until the Direction column didn't have a ?
+metal2[24829,]
+clean_1[POS == 35384250,]
+clean_2[POS == 35384250,]
+
+meta_results <- data.frame(study = c("Study 1", "Study 2", "meta"), beta = c(0.114, -0.05763, -0.0573), se = c(0.1352, 0.001706, 0.006))
+
+meta_results <- meta_results %>% mutate(l95 = beta - 1.96*se, u95 = beta + 1.96*se)
+
+ggplot(meta_results, aes(y=fct_rev(study)))+
+  geom_point(aes(x = beta, size = factor(study == "meta"), shape = factor(study == "meta")))+
+  geom_linerange(aes(xmin = l95, xmax = u95))+
+  geom_vline(xintercept = 0, linetype = "dashed")+
+  scale_size_manual(values = c(2,7))+
+  scale_shape_manual(values = c(16,18))+
+  theme_classic()+
+  theme(legend.position = "none", axis.line.y = element_blank(), axis.ticks.y = element_blank(), axis.title.y = element_blank())
+```
